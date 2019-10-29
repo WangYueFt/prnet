@@ -1,11 +1,5 @@
-#0!/usr/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-@Author: Yue Wang
-@Contact: yuewangx@mit.edu
-@File: model
-@Time: 2/12/19 5:58 PM
-"""
 
 
 import os
@@ -20,127 +14,8 @@ from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from tensorboardX import SummaryWriter
 from sklearn.metrics import r2_score
 from util import transform_point_cloud, npmat2euler, quat2mat
-
-
-def sinkhorn(a: torch.Tensor, b: torch.Tensor, M: torch.Tensor, eps: float,
-             max_iters: int = 100, stop_thresh: float = 1e-3):
-    """
-    Compute the Sinkhorn divergence between two sum of dirac delta distributions, U, and V.
-    This implementation is numerically stable with float32.
-    :param a: A m-sized minibatch of weights for each dirac in the first distribution, U. i.e. shape = [m, n]
-    :param b: A m-sized minibatch of weights for each dirac in the second distribution, V. i.e. shape = [m, n]
-    :param M: A minibatch of n-by-n tensors storing the distance between each pair of diracs in U and V.
-             i.e. shape = [m, n, n] and each i.e. M[k, i, j] = ||u[k,_i] - v[k, j]||
-    :param eps: The reciprocal of the sinkhorn regularization parameter (might be learned through a nn)
-    :param max_iters: The maximum number of Sinkhorn iterations
-    :param stop_thresh: Stop if the change in iterates is below this value
-    :return:
-    """
-    # a and b are tensors of size [m, n]
-    # M is a tensor of size [m, n, n]
-
-    nb = M.shape[0]
-    m = M.shape[1]
-    n = M.shape[2]
-
-    if a.dtype != b.dtype or a.dtype != M.dtype:
-        raise ValueError("Tensors a, b, and M must have the same dtype got: dtype(a) = %s, dtype(b) = %s, dtype(M) = %s"
-                         % (str(a.dtype), str(b.dtype), str(M.dtype)))
-    if a.device != b.device or a.device != M.device:
-        raise ValueError("Tensors a, b, and M must be on the same device got: "
-                         "device(a) = %s, device(b) = %s, device(M) = %s"
-                         % (a.device, b.device, M.device))
-    if len(M.shape) != 3:
-        raise ValueError("Got unexpected shape for M (%s), should be [nb, m, n] where nb is batch size, and "
-                         "m and n are the number of samples in the two input measures." % str(M.shape))
-    if torch.Size(a.shape) != torch.Size([nb, m]):
-        raise ValueError("Got unexpected shape for tensor a (%s). Expected [nb, m] where M has shape [nb, m, n]." %
-                         str(a.shape))
-
-    if torch.Size(b.shape) != torch.Size([nb, n]):
-        raise ValueError("Got unexpected shape for tensor b (%s). Expected [nb, n] where M has shape [nb, m, n]." %
-                         str(b.shape))
-
-    # Initialize the iteration with the change of variable
-    u = torch.zeros(a.shape, dtype=a.dtype, device=a.device)
-    v = eps * torch.log(b)
-
-    M_t = torch.transpose(M, 1, 2)
-
-    def stabilized_log_sum_exp(x):
-        max_x = torch.max(x, dim=2)[0]
-        x = x - max_x.unsqueeze(2)
-        ret = torch.log(torch.sum(torch.exp(x), dim=2)) + max_x
-        return ret
-
-    for current_iter in range(max_iters):
-        u_prev = u
-        v_prev = v
-
-        summand_u = (-M + v.unsqueeze(1)) / eps
-        u = eps * (torch.log(a) - stabilized_log_sum_exp(summand_u))
-
-        summand_v = (-M_t + u.unsqueeze(1)) / eps
-        v = eps * (torch.log(b) - stabilized_log_sum_exp(summand_v))
-
-        err_u = torch.max(torch.sum(torch.abs(u_prev - u), dim=1))
-        err_v = torch.max(torch.sum(torch.abs(v_prev - v), dim=1))
-
-        if err_u < stop_thresh and err_v < stop_thresh:
-            break
-
-    log_P = (-M + u.unsqueeze(2) + v.unsqueeze(1)) / eps
-
-    P = torch.exp(log_P)
-
-    return P
-
-
-def sinkhorn2(M, eps=1e-6, tau=1e-2, max_iters=100):
-
-    def logsumexp(inputs, dim=None, keepdim=False):
-        """Numerically stable logsumexp.
-        Args:
-            inputs: A Variable with any shape.
-            dim: An integer.
-            keepdim: A boolean.
-        Returns:
-            Equivalent of log(sum(exp(inputs), dim=dim, keepdim=keepdim)).
-        """
-        # For a 1-D array x (any array along a single dimension),
-        # log sum exp(x) = s + log sum exp(x - s)
-        # with s = max(x) being a common choice.
-        if dim is None:
-            inputs = inputs.view(-1)
-            dim = 0
-        s, _ = torch.max(inputs, dim=dim, keepdim=True)
-        outputs = s + (inputs - s).exp().sum(dim=dim, keepdim=True).log()
-        if not keepdim:
-            outputs = outputs.squeeze(dim)
-        return outputs
-
-    def row_norm(x):
-        """Unstable implementation"""
-        # y = torch.matmul(torch.matmul(x, self.ones), torch.t(self.ones))
-        # return torch.div(x, y)
-        """Stable, log-scale implementation"""
-        return x - logsumexp(x, dim=2, keepdim=True)
-
-    def col_norm(x):
-        """Unstable implementation"""
-        # y = torch.matmul(torch.matmul(self.ones, torch.t(self.ones)), x)
-        # return torch.div(x, y)
-        """Stable, log-scale implementation"""
-        return x - logsumexp(x, dim=1, keepdim=True)
-
-    M = M / tau
-    for _ in range(max_iters):
-        M = row_norm(M)
-        M = col_norm(M)
-    return torch.exp(M) + eps
 
 
 def clones(module, N):
@@ -287,13 +162,12 @@ class LayerNorm(nn.Module):
         self.a_2 = nn.Parameter(torch.ones(features))
         self.b_2 = nn.Parameter(torch.zeros(features))
         self.eps = eps
-        self.norm = nn.BatchNorm1d(features)
 
     def forward(self, x):
         mean = x.mean(-1, keepdim=True)
         std = x.std(-1, keepdim=True)
         return self.a_2 * (x-mean) / (std + self.eps) + self.b_2
-        # return self.norm(x.transpose(2, 1).contiguous()).transpose(2, 1).contiguous()
+
 
 class SublayerConnection(nn.Module):
     def __init__(self, size, dropout):
@@ -520,9 +394,9 @@ class TemperatureNet(nn.Module):
                                 nn.ReLU(),
                                 nn.Linear(128, 128),
                                 nn.BatchNorm1d(128),
-                                nn.ReLU(128),
+                                nn.ReLU(),
                                 nn.Linear(128, 1),
-                                nn.Sigmoid())
+                                nn.ReLU())
         self.feature_disparity = None
 
     def forward(self, *input):
@@ -542,8 +416,6 @@ class SVDHead(nn.Module):
         super(SVDHead, self).__init__()
         self.n_emb_dims = args.n_emb_dims
         self.cat_sampler = args.cat_sampler
-        self.sinkhorn_lam = args.sinkhorn_lam
-        self.sinkhorn_maxiter = args.sinkhorn_maxiter
         self.reflect = nn.Parameter(torch.eye(3), requires_grad=False)
         self.reflect[2, 2] = -1
         self.temperature = nn.Parameter(torch.ones(1)*0.5, requires_grad=True)
@@ -557,44 +429,15 @@ class SVDHead(nn.Module):
         batch_size, num_dims, num_points = src.size()
         temperature = input[4].view(batch_size, 1, 1)
 
-        if self.cat_sampler == 'sinkhorn':
-            M = pairwise_distance(src_embedding, tgt_embedding)
-            scores = sinkhorn2(M, tau=1e-2, max_iters=30)
-        elif self.cat_sampler == 'st_sinkhorn':
-            M = pairwise_distance(src_embedding, tgt_embedding)
-            scores = sinkhorn2(M, tau=1e-2, max_iters=10)
-            _, k = scores.max(dim=-1, keepdim=True)
-            hard = torch.zeros_like(scores).scatter(-1, k, 1.0)
-            scores = hard - scores.detach() + scores
-        elif self.cat_sampler == 'softmax':
+        if self.cat_sampler == 'softmax':
             d_k = src_embedding.size(1)
             scores = torch.matmul(src_embedding.transpose(2, 1).contiguous(), tgt_embedding) / math.sqrt(d_k)
             scores = torch.softmax(temperature*scores, dim=2)
-        elif self.cat_sampler == 'st_softmax':
-            d_k = src_embedding.size(1)
-            logits = torch.matmul(src_embedding.transpose(2, 1).contiguous(), tgt_embedding) / math.sqrt(d_k)
-            logits = logits / self.temperature
-            soft = torch.softmax(logits, dim=2)
-            _, k = soft.max(dim=-1, keepdim=True)
-            hard = torch.zeros_like(soft).scatter(-1, k, 1.0)
-            scores = hard - soft.detach() + soft
         elif self.cat_sampler == 'gumbel_softmax':
             d_k = src_embedding.size(1)
             scores = torch.matmul(src_embedding.transpose(2, 1).contiguous(), tgt_embedding) / math.sqrt(d_k)
             scores = scores.view(batch_size*num_points, num_points)
             temperature = temperature.repeat(1, num_points, 1).view(-1, 1)
-            # tau = max(0.1, math.exp(-(6e-5)*self.my_iter))
-            scores = F.gumbel_softmax(scores, tau=temperature, hard=True)
-            scores = scores.view(batch_size, num_points, num_points)
-        elif self.cat_sampler == 'gumbel_sinkhorn':
-            M = pairwise_distance(src_embedding, tgt_embedding)
-            scores = sinkhorn2(M, tau=1e-2, max_iters=10)
-            # _, k = scores.max(dim=-1, keepdim=True)
-            # hard = torch.zeros_like(scores).scatter(-1, k, 1.0)
-            # scores = hard - scores.detach() + scores
-            scores = scores.view(batch_size*num_points, num_points)
-            temperature = temperature.repeat(1, num_points, 1).view(-1, 1)
-            # tau = max(0.1, math.exp(-(6e-5)*self.my_iter))
             scores = F.gumbel_softmax(scores, tau=temperature, hard=True)
             scores = scores.view(batch_size, num_points, num_points)
         else:
@@ -656,9 +499,9 @@ class KeyPointNet(nn.Module):
         return src_keypoints, tgt_keypoints, src_embedding, tgt_embedding
 
 
-class DCPNet(nn.Module):
+class ACPNet(nn.Module):
     def __init__(self, args):
-        super(DCPNet, self).__init__()
+        super(ACPNet, self).__init__()
         self.n_emb_dims = args.n_emb_dims
         self.num_keypoints = args.n_keypoints
         self.num_subsampled_points = args.n_subsampled_points
@@ -716,40 +559,34 @@ class DCPNet(nn.Module):
 
     def predict_keypoint_correspondence(self, *input):
         src, tgt, src_embedding, tgt_embedding, temperature, _ = self.predict_embedding(*input)
-        # d_k = src_embedding.size(1)
-        # scores = torch.matmul(src_embedding.transpose(2, 1).contiguous(), tgt_embedding) / math.sqrt(d_k)
-        # scores = torch.softmax(temperature*scores, dim=2)
         batch_size, num_dims, num_points = src.size()
         d_k = src_embedding.size(1)
         scores = torch.matmul(src_embedding.transpose(2, 1).contiguous(), tgt_embedding) / math.sqrt(d_k)
         scores = scores.view(batch_size*num_points, num_points)
         temperature = temperature.repeat(1, num_points, 1).view(-1, 1)
-            # tau = max(0.1, math.exp(-(6e-5)*self.my_iter))
         scores = F.gumbel_softmax(scores, tau=temperature, hard=True)
         scores = scores.view(batch_size, num_points, num_points)
         return src, tgt, scores
 
 
-class DeepICP(nn.Module):
+class PRNet(nn.Module):
     def __init__(self, args):
-        super(DeepICP, self).__init__()
+        super(PRNet, self).__init__()
         self.num_iters = args.n_iters
         self.logger = Logger(args)
         self.discount_factor = args.discount_factor
-        self.dcpnet = DCPNet(args)
+        self.acpnet = ACPNet(args)
         self.model_path = args.model_path
         self.feature_alignment_loss = args.feature_alignment_loss
         self.cycle_consistency_loss = args.cycle_consistency_loss
-        self.scale_consensus_loss = args.scale_consensus_loss
-        self.n_pyramids = args.n_pyramids
 
         if self.model_path is not '':
             self.load(self.model_path)
         if torch.cuda.device_count() > 1:
-            self.dcpnet = nn.DataParallel(self.dcpnet)
+            self.acpnet = nn.DataParallel(self.acpnet)
 
     def forward(self, *input):
-        rotation_ab, translation_ab, rotation_ba, translation_ba, feature_disparity = self.dcpnet(*input)
+        rotation_ab, translation_ab, rotation_ba, translation_ba, feature_disparity = self.acpnet(*input)
         return rotation_ab, translation_ab, rotation_ba, translation_ba, feature_disparity
 
     def predict(self, src, tgt, n_iters=3):
@@ -983,18 +820,17 @@ class DeepICP(nn.Module):
 
     def save(self, path):
         if torch.cuda.device_count() > 1:
-            torch.save(self.dcpnet.module.state_dict(), path)
+            torch.save(self.acpnet.module.state_dict(), path)
         else:
-            torch.save(self.dcpnet.state_dict(), path)
+            torch.save(self.acpnet.state_dict(), path)
 
     def load(self, path):
-        self.dcpnet.load_state_dict(torch.load(path))
+        self.acpnet.load_state_dict(torch.load(path))
 
 
 class Logger:
     def __init__(self, args):
         self.path = 'checkpoints/' + args.exp_name
-        self.sw = SummaryWriter(log_dir=self.path)
         self.fw = open(self.path+'/log', 'a')
         self.fw.write(str(args))
         self.fw.write('\n')
@@ -1030,36 +866,9 @@ class Logger:
         self.fw.flush()
         print(text)
 
-        self.sw.add_scalar('%s/%s/loss'%(arrow, stage), loss, epoch)
-        self.sw.add_scalar('%s/%s/feature_alignment_loss'%(arrow, stage), feature_alignment_loss, epoch)
-        self.sw.add_scalar('%s/%s/cycle_consistency_loss'%(arrow, stage), cycle_consistency_loss, epoch)
-        self.sw.add_scalar('%s/%s/scale_consensus_loss'%(arrow, stage), scale_consensus_loss, epoch)
-
-        self.sw.add_scalar('%s/%s/rotation/MSE'%(arrow, stage), r_ab_mse, epoch)
-        self.sw.add_scalar('%s/%s/rotation/RMSE'%(arrow, stage), r_ab_rmse, epoch)
-        self.sw.add_scalar('%s/%s/rotation/MAE'%(arrow, stage), r_ab_mae, epoch)
-        self.sw.add_scalar('%s/%s/rotation/R2'%(arrow, stage), r_ab_r2_score, epoch)
-        self.sw.add_scalar('%s/%s/translation/MSE'%(arrow, stage), t_ab_mse, epoch)
-        self.sw.add_scalar('%s/%s/translation/RMSE'%(arrow, stage), t_ab_rmse, epoch)
-        self.sw.add_scalar('%s/%s/translation/MAE'%(arrow, stage), t_ab_mae, epoch)
-        self.sw.add_scalar('%s/%s/translation/R2'%(arrow, stage), t_ab_r2_score, epoch)
-
     def close(self):
-        self.sw.close()
         self.fw.close()
 
 
 if __name__ == '__main__':
-    a = torch.rand(2, 3, 500)
-    rx = np.array([[1, 0, 0],[0, np.cos(np.pi/4), -np.sin(np.pi/4)], [0, np.sin(np.pi/4), np.cos(np.pi/4)]])
-    ry = np.array([[np.cos(np.pi/10), 0, np.sin(np.pi/10)], [0, 1, 0], [-np.sin(np.pi/10), 0, np.cos(np.pi/10)]])
-    rz = np.array([[np.cos(np.pi/10), -np.sin(np.pi/10), 0], [np.sin(np.pi/10), np.cos(np.pi/10), 0], [0, 0, 1]])
-    rr = rx.dot(ry).dot(rz)
-    rr = rr.astype('float32')
-    rr = torch.from_numpy(np.array([rr, rr]))
-    b = torch.matmul(rr, a)
-    model = ICPNet()
-    transformation = model(a, b)
-    print(rr)
-    print(transformation)
-    print(np.pi/10)
+    print('hello world')

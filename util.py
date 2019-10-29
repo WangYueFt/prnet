@@ -1,11 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-@Author: Yue Wang
-@Contact: yuewangx@mit.edu
-@File: util
-@Time: 2/20/19 3:39 PM
-"""
 
 
 from __future__ import print_function
@@ -166,28 +160,4 @@ def npmat2euler(mats, seq='zyx'):
 
 
 if __name__ == '__main__':
-    anglex = np.random.uniform() * np.pi / 2
-    angley = np.random.uniform() * np.pi / 2
-    anglez = np.random.uniform() * np.pi / 2
-    cosx = np.cos(anglex)
-    cosy = np.cos(angley)
-    cosz = np.cos(anglez)
-    sinx = np.sin(anglex)
-    siny = np.sin(angley)
-    sinz = np.sin(anglez)
-    Rx = np.array([[1, 0, 0],
-                   [0, cosx, -sinx],
-                   [0, sinx, cosx]])
-    Ry = np.array([[cosy, 0, siny],
-                   [0, 1, 0],
-                   [-siny, 0, cosy]])
-    Rz = np.array([[cosz, -sinz, 0],
-                   [sinz, cosz, 0],
-                   [0, 0, 1]])
-    R = Rx.dot(Ry).dot(Rz)
-
-    R = torch.from_numpy(R).view(1, 3, 3)
-    print(mat2euler(R, seq='xyz'))
-    print(anglex)
-    print(angley)
-    print(anglez)
+    print('hello world')

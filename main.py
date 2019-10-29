@@ -1,11 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-@Author: Yue Wang
-@Contact: yuewangx@mit.edu
-@File: main
-@Time: 2/19/19 6:18 PM
-"""
 
 
 from __future__ import print_function
@@ -16,10 +10,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import MultiStepLR
-from data import ModelNet40, ShapeNet, Bunny
+from data import ModelNet40
 import numpy as np
 from torch.utils.data import DataLoader
-from model import DeepICP
+from model import PRNet
 
 
 def _init_(args):
@@ -32,9 +26,6 @@ def _init_(args):
     os.system('cp main.py checkpoints' + '/' + args.exp_name + '/' + 'main.py.backup')
     os.system('cp model.py checkpoints' + '/' + args.exp_name + '/' + 'model.py.backup')
     os.system('cp data.py checkpoints' + '/' + args.exp_name + '/' + 'data.py.backup')
-
-# def test(args, net, test_loader):
-#    info_test = net._test_one_epoch(epoch=-1, test_loader=test_loader)
 
 
 def train(args, net, train_loader, test_loader):
@@ -73,16 +64,16 @@ def main():
     parser = argparse.ArgumentParser(description='Point Cloud Registration')
     parser.add_argument('--exp_name', type=str, default='exp', metavar='N',
                         help='Name of the experiment')
-    parser.add_argument('--model', type=str, default='deepicp', metavar='N',
-                        choices=['icp', 'goicp', 'deepicp', 'fgr', 'pnlk'],
-                        help='Model to use, [icp, goicp, deepicp, fgr, pnlk]')
-    parser.add_argument('--emb_nn', type=str, default='pointnet', metavar='N',
+    parser.add_argument('--model', type=str, default='prnet', metavar='N',
+                        choices=['prnet'],
+                        help='Model to use, [prnet]')
+    parser.add_argument('--emb_nn', type=str, default='dgcnn', metavar='N',
                         choices=['pointnet', 'dgcnn'],
                         help='Embedding to use, [pointnet, dgcnn]')
-    parser.add_argument('--attention', type=str, default='identity', metavar='N',
+    parser.add_argument('--attention', type=str, default='transformer', metavar='N',
                         choices=['identity', 'transformer'],
                         help='Head to use, [identity, transformer]')
-    parser.add_argument('--head', type=str, default='mlp', metavar='N',
+    parser.add_argument('--head', type=str, default='svd', metavar='N',
                         choices=['mlp', 'svd'],
                         help='Head to use, [mlp, svd]')
     parser.add_argument('--n_emb_dims', type=int, default=512, metavar='N',
@@ -91,24 +82,18 @@ def main():
                         help='Num of blocks of encoder&decoder')
     parser.add_argument('--n_heads', type=int, default=4, metavar='N',
                         help='Num of heads in multiheadedattention')
-    parser.add_argument('--n_iters', type=int, default=5, metavar='N',
+    parser.add_argument('--n_iters', type=int, default=3, metavar='N',
                         help='Num of iters to run inference')
-    parser.add_argument('--discount_factor', type=float, default=1.0, metavar='N',
+    parser.add_argument('--discount_factor', type=float, default=0.9, metavar='N',
                         help='Discount factor to compute the loss')
     parser.add_argument('--n_ff_dims', type=int, default=1024, metavar='N',
                         help='Num of dimensions of fc in transformer')
-    parser.add_argument('--n_keypoints', type=int, default=1024, metavar='N',
+    parser.add_argument('--n_keypoints', type=int, default=512, metavar='N',
                         help='Num of keypoints to use')
-    parser.add_argument('--temp_factor', type=float, default=1000, metavar='N',
+    parser.add_argument('--temp_factor', type=float, default=100, metavar='N',
                         help='Factor to control the softmax precision')
-    parser.add_argument('--cat_sampler', type=str, default='softmax', choices=['softmax', 'st_softmax',
-                                                                               'sinkhorn', 'st_sinkhorn',
-                                                                               'gumbel_softmax', 'gumbel_sinkhorn'],
-                        metavar='N', help='use softmax/sinkhorn/gumbel_softmax to get the categorical sample')
-    parser.add_argument('--sinkhorn_lam', type=float, default=1.0, metavar='N',
-                        help='sinkhorn regularizer')
-    parser.add_argument('--sinkhorn_maxiter', type=int, default=30, metavar='N',
-                        help='num of sinkhorn iters')
+    parser.add_argument('--cat_sampler', type=str, default='gumbel_softmax', choices=['softmax', 'gumbel_softmax'],
+                        metavar='N', help='use gumbel_softmax to get the categorical sample')
     parser.add_argument('--dropout', type=float, default=0.0, metavar='N',
                         help='Dropout ratio in transformer')
     parser.add_argument('--batch_size', type=int, default=36, metavar='batch_size',
@@ -129,14 +114,10 @@ def main():
                         help='random seed (default: 1)')
     parser.add_argument('--eval', action='store_true', default=False,
                         help='evaluate the model')
-    parser.add_argument('--cycle_consistency_loss', type=float, default=0.0, metavar='N',
+    parser.add_argument('--cycle_consistency_loss', type=float, default=0.1, metavar='N',
                         help='cycle consistency loss')
-    parser.add_argument('--feature_alignment_loss', type=float, default=0.0, metavar='N',
+    parser.add_argument('--feature_alignment_loss', type=float, default=0.1, metavar='N',
                         help='feature alignment loss')
-    parser.add_argument('--n_pyramids', type=int, default=1, metavar='N',
-                        help='num of keypoints pyramids to use')
-    parser.add_argument('--scale_consensus_loss', type=float, default=0.0, metavar='N',
-                        help='consensus loss to use')
     parser.add_argument('--gaussian_noise', type=bool, default=False, metavar='N',
                         help='Wheter to add gaussian noise')
     parser.add_argument('--unseen', type=bool, default=False, metavar='N',
@@ -145,12 +126,10 @@ def main():
                         help='Num of points to use')
     parser.add_argument('--n_subsampled_points', type=int, default=768, metavar='N',
                         help='Num of subsampled points to use')
-    parser.add_argument('--dataset', type=str, default='modelnet40', choices=['modelnet40', 'shapenet', 'bunny'], metavar='N',
+    parser.add_argument('--dataset', type=str, default='modelnet40', choices=['modelnet40'], metavar='N',
                         help='dataset to use')
     parser.add_argument('--rot_factor', type=float, default=4, metavar='N',
                         help='Divided factor of rotation')
-    parser.add_argument('--pnlk_path', type=str, default='', metavar='N',
-                        help='PointNetLK pretrained path')
     parser.add_argument('--model_path', type=str, default='', metavar='N',
                         help='Pretrained model path')
 
@@ -173,33 +152,11 @@ def main():
                                             partition='test', gaussian_noise=args.gaussian_noise,
                                             unseen=args.unseen, rot_factor=args.rot_factor),
                                  batch_size=args.test_batch_size, shuffle=False, drop_last=False, num_workers=6)
-    elif args.dataset == 'shapenet':
-        train_loader = DataLoader(ShapeNet(num_points=args.n_points,
-                                           num_subsampled_points=args.n_subsampled_points,
-                                           partition='train', gaussian_noise=args.gaussian_noise,
-                                           unseen=args.unseen, rot_factor=args.rot_factor),
-                                  batch_size=args.batch_size, shuffle=True, drop_last=True, num_workers=6)
-        test_loader = DataLoader(ModelNet40(num_points=args.n_points,
-                                            num_subsampled_points=args.n_subsampled_points,
-                                            partition='test', gaussian_noise=args.gaussian_noise,
-                                            unseen=args.unseen, rot_factor=args.rot_factor),
-                                 batch_size=args.test_batch_size, shuffle=False, drop_last=False, num_workers=6)
-    elif args.dataset == 'bunny':
-        train_loader = DataLoader(Bunny(num_points=args.n_points,
-                                        num_subsampled_points=args.n_subsampled_points,
-                                        partition='train', gaussian_noise=args.gaussian_noise,
-                                        unseen=args.unseen, rot_factor=args.rot_factor),
-                                  batch_size=args.batch_size, shuffle=True, drop_last=True, num_workers=6)
-        test_loader = DataLoader(Bunny(num_points=args.n_points,
-                                       num_subsampled_points=args.n_subsampled_points,
-                                       partition='test', gaussian_noise=args.gaussian_noise,
-                                       unseen=args.unseen, rot_factor=args.rot_factor),
-                                 batch_size=args.test_batch_size, shuffle=False, drop_last=False, num_workers=6)
     else:
         raise Exception("not implemented")
 
-    if args.model == 'deepicp':
-        net = DeepICP(args).cuda()
+    if args.model == 'prnet':
+        net = PRNet(args).cuda()
         if args.eval:
             if args.model_path is '':
                 model_path = 'checkpoints' + '/' + args.exp_name + '/models/model.best.t7'
